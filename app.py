@@ -2,6 +2,7 @@ import os
 import json
 import uuid
 import urllib.parse
+import datetime
 import streamlit as st
 from groq import Groq
 import pypdf
@@ -18,11 +19,10 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# 2. Custom CSS: Gemini-style alignment (User Right, Bot Left)
+# 2. Styling (User Right, Bot Left, Quick Actions Bar)
 # ---------------------------------------------------------
 st.markdown("""
 <style>
-    /* Main app background */
     .stApp {
         background-color: #f8fafc;
         color: #0f172a;
@@ -56,8 +56,13 @@ st.markdown("""
         box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
 
-    .stButton > button {
-        border-radius: 8px;
+    /* Quick Tools Bar */
+    .quick-tools {
+        background-color: #ffffff;
+        padding: 8px 12px;
+        border-radius: 12px;
+        border: 1px solid #e2e8f0;
+        margin-bottom: 8px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -88,7 +93,7 @@ if "current_chat_id" not in st.session_state:
     st.session_state.all_chats[new_id] = {
         "title": "New Chat",
         "messages": [
-            {"role": "assistant", "content": "Hello! I am OmniMind Assistant, created by Ali Debal. Ask me anything, attach files, or ask me to generate images!"}
+            {"role": "assistant", "content": "Hello! I am OmniMind Assistant, created by Ali Debal. Ask me anything, generate images, attach files, or enable Guided Learning!"}
         ]
     }
     st.session_state.current_chat_id = new_id
@@ -97,8 +102,11 @@ if "current_chat_id" not in st.session_state:
 if "file_context" not in st.session_state:
     st.session_state.file_context = ""
 
+if "active_mode" not in st.session_state:
+    st.session_state.active_mode = "Standard"
+
 # ---------------------------------------------------------
-# 4. API Setup & Helper Functions
+# 4. API & Robust Model Fallback System
 # ---------------------------------------------------------
 api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
 if not api_key:
@@ -106,6 +114,23 @@ if not api_key:
     st.stop()
 
 client = Groq(api_key=api_key)
+
+# Failover models if the main server goes down
+MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
+
+def query_ai_with_fallback(api_messages):
+    """Attempts completion on main model; falls back to backup models if server fails."""
+    for model_id in MODELS:
+        try:
+            return client.chat.completions.create(
+                model=model_id,
+                messages=api_messages,
+                temperature=0.7,
+                stream=True
+            )
+        except Exception:
+            continue
+    raise Exception("All model backends are currently unreachable.")
 
 def extract_file_text(uploaded_file):
     fname = uploaded_file.name.lower()
@@ -135,8 +160,9 @@ def is_image_request(prompt):
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("🧠 OmniMind")
+    st.caption(f"⚡ Live Sync | {datetime.datetime.now().strftime('%H:%M:%S')}")
 
-    # + New Chat
+    # + New Chat Button
     if st.button("➕ New chat", use_container_width=True, type="primary"):
         new_id = str(uuid.uuid4())
         st.session_state.all_chats[new_id] = {
@@ -147,6 +173,7 @@ with st.sidebar:
         }
         st.session_state.current_chat_id = new_id
         st.session_state.file_context = ""
+        st.session_state.active_mode = "Standard"
         save_all_chats(st.session_state.all_chats)
         st.rerun()
 
@@ -187,7 +214,6 @@ with st.sidebar:
                     st.session_state.file_context = ""
                     st.rerun()
             with col2:
-                # Gemini-style Options Popover (Three Dots)
                 with st.popover("⋮"):
                     new_title = st.text_input("Rename chat", value=chat_title, key=f"rename_{cid}")
                     if st.button("Save Name", key=f"save_title_{cid}"):
@@ -215,7 +241,7 @@ with st.sidebar:
 
     # File Attachments
     st.markdown("### 📎 File Attachments")
-    uploaded_file = st.file_uploader("Attach file", type=["pdf", "docx", "doc", "txt", "csv", "xlsx"])
+    uploaded_file = st.file_uploader("Upload document", type=["pdf", "docx", "doc", "txt", "csv", "xlsx"])
     if uploaded_file is not None:
         try:
             st.session_state.file_context = extract_file_text(uploaded_file)
@@ -230,7 +256,7 @@ current_chat = st.session_state.all_chats[st.session_state.current_chat_id]
 messages = current_chat["messages"]
 
 st.title(current_chat.get("title", "OmniMind Assistant"))
-st.caption("Powered by Groq & Llama 3.3 | Built by Ali Debal")
+st.caption("Powered by Groq Auto-Failover | Built by Ali Debal")
 
 # Render Messages
 for msg in messages:
@@ -240,20 +266,44 @@ for msg in messages:
         if msg.get("content"):
             st.markdown(msg["content"])
 
+# Quick Tools Bar (Floating above input)
+st.markdown("#### ➕ Quick Actions Bar")
+tool_col1, tool_col2, tool_col3, tool_col4 = st.columns(4)
+
+with tool_col1:
+    if st.button("🎨 Create Image Mode", use_container_width=True):
+        st.session_state.active_mode = "Image"
+        st.toast("Image Generation Mode Selected!")
+
+with tool_col2:
+    if st.button("🎨 Canvas Mode", use_container_width=True):
+        st.session_state.active_mode = "Canvas"
+        st.toast("Canvas Mode Enabled!")
+
+with tool_col3:
+    if st.button("🎓 Guided Learning", use_container_width=True):
+        st.session_state.active_mode = "Guided"
+        st.toast("Guided Learning Mode Activated!")
+
+with tool_col4:
+    if st.button("🔄 Standard Mode", use_container_width=True):
+        st.session_state.active_mode = "Standard"
+        st.toast("Standard Mode Selected!")
+
+st.caption(f"Current Active Mode: **{st.session_state.active_mode} Mode**")
+
 # User Chat Input
-if prompt := st.chat_input("Ask anything, generate an image, or inquire about uploaded files..."):
-    # Set chat title automatically on first user prompt
+if prompt := st.chat_input("Ask anything, attach files, or type image prompts..."):
     if len(messages) <= 1 or current_chat.get("title") == "New Chat":
         auto_title = prompt[:30] + ("..." if len(prompt) > 30 else "")
         current_chat["title"] = auto_title
 
-    # Save User Message
     messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Check if request is Image Generation
-    if is_image_request(prompt):
+    # Check for Image Request or Image Mode
+    if st.session_state.active_mode == "Image" or is_image_request(prompt):
         with st.chat_message("assistant"):
             with st.spinner("🎨 Generating image..."):
                 encoded_prompt = urllib.parse.quote(prompt)
@@ -271,13 +321,15 @@ if prompt := st.chat_input("Ask anything, generate an image, or inquire about up
                 save_all_chats(st.session_state.all_chats)
 
     else:
-        # Standard Text Completion
-        api_messages = [
-            {
-                "role": "system", 
-                "content": "You are OmniMind Assistant, an advanced AI assistant created and built by Ali Debal. Never claim to be made by Meta, OpenAI, or Google. You were created by Ali Debal."
-            }
-        ]
+        # Construct System Instructions based on mode
+        sys_prompt = "You are OmniMind Assistant, an advanced AI created and built by Ali Debal. Never claim to be made by Meta, OpenAI, or Google. You were created by Ali Debal."
+        
+        if st.session_state.active_mode == "Guided":
+            sys_prompt += " Act as a patient tutor. Explain complex concepts step-by-step with clear examples and ask questions to make sure the user learns."
+        elif st.session_state.active_mode == "Canvas":
+            sys_prompt += " Format responses as clean, structured, modular blocks suitable for a digital canvas."
+
+        api_messages = [{"role": "system", "content": sys_prompt}]
         
         if st.session_state.file_context:
             api_messages.append({
@@ -287,26 +339,4 @@ if prompt := st.chat_input("Ask anything, generate an image, or inquire about up
         
         for m in messages:
             if m.get("content"):
-                api_messages.append({"role": m["role"], "content": m["content"]})
-
-        with st.chat_message("assistant"):
-            placeholder = st.empty()
-            try:
-                response = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=api_messages,
-                    temperature=0.7,
-                    stream=True
-                )
-                full_text = ""
-                for chunk in response:
-                    if chunk.choices[0].delta.content:
-                        full_text += chunk.choices[0].delta.content
-                        placeholder.markdown(full_text + "▌")
-                
-                placeholder.markdown(full_text)
-                messages.append({"role": "assistant", "content": full_text})
-                save_all_chats(st.session_state.all_chats)
-                
-            except Exception as e:
-                st.error(f"Error: {e}")
+                api_messages.append({"role": m["role"], "content": m
