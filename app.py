@@ -2,6 +2,7 @@ import os
 import uuid
 import urllib.parse
 import datetime
+import requests
 import streamlit as st
 import streamlit.components.v1 as components
 from groq import Groq
@@ -19,17 +20,16 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# 2. Advanced Styling (Dark Mode Support, Alignment, Hide Fork)
+# 2. Custom Styling & Dark Mode Rules
 # ---------------------------------------------------------
 st.markdown("""
 <style>
-    /* Hide Streamlit Header, Fork, and Main Menu */
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
     footer {visibility: hidden;}
     div[data-testid="stHeader"] {display: none !important;}
 
-    /* User Message - RIGHT ALIGNED */
+    /* User Message Alignment (Right) */
     div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity user"]) {
         flex-direction: row-reverse !important;
         text-align: right !important;
@@ -42,7 +42,7 @@ st.markdown("""
         color: #0f172a !important;
     }
 
-    /* Assistant Message - LEFT ALIGNED */
+    /* Assistant Message Alignment (Left) */
     div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity assistant"]) {
         flex-direction: row !important;
         text-align: left !important;
@@ -56,24 +56,20 @@ st.markdown("""
         color: #0f172a !important;
     }
 
-    /* Dark Mode Overrides for Text & Containers */
     @media (prefers-color-scheme: dark) {
         .stApp {
             background-color: #0f172a !important;
             color: #f8fafc !important;
         }
-        
         div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity user"]) {
             background-color: #1e3a8a !important;
             color: #ffffff !important;
         }
-
         div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity assistant"]) {
             background-color: #1e293b !important;
             border-color: #334155 !important;
             color: #f8fafc !important;
         }
-
         p, span, h1, h2, h3, h4, h5, h6, label {
             color: #f8fafc !important;
         }
@@ -87,7 +83,6 @@ st.markdown("""
 
 # ---------------------------------------------------------
 # 3. Private Session State Management
-# (Ensures individual users never see each other's chats)
 # ---------------------------------------------------------
 if "user_chats" not in st.session_state:
     initial_id = str(uuid.uuid4())
@@ -95,7 +90,7 @@ if "user_chats" not in st.session_state:
         initial_id: {
             "title": "New Chat",
             "messages": [
-                {"role": "assistant", "content": "Hello! I am OmniMind Assistant, created by Ali Debal. How can I help you today?"}
+                {"role": "assistant", "content": "Hello! I am OmniMind Assistant, created by Ali Debal. How can I assist you today?"}
             ]
         }
     }
@@ -107,15 +102,20 @@ if "file_context" not in st.session_state:
 if "active_mode" not in st.session_state:
     st.session_state.active_mode = "Standard"
 
+if "voice_enabled" not in st.session_state:
+    st.session_state.voice_enabled = False
+
 # ---------------------------------------------------------
-# 4. API & Auto-Failover Setup
+# 4. API & Speech Setup
 # ---------------------------------------------------------
-api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
-if not api_key:
+groq_api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
+elevenlabs_key = st.secrets.get("ELEVENLABS_API_KEY") or os.getenv("ELEVENLABS_API_KEY")
+
+if not groq_api_key:
     st.error("GROQ_API_KEY missing! Please configure it in Streamlit Secrets.")
     st.stop()
 
-client = Groq(api_key=api_key)
+client = Groq(api_key=groq_api_key)
 MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
 
 def query_ai_with_fallback(api_messages):
@@ -125,11 +125,40 @@ def query_ai_with_fallback(api_messages):
                 model=model_id,
                 messages=api_messages,
                 temperature=0.7,
-                stream=True
+                stream=False
             )
         except Exception:
             continue
-    raise Exception("All AI backends are currently busy or unreachable.")
+    raise Exception("All AI backends are currently unreachable.")
+
+def generate_natural_voice(text):
+    """Converts text to human-like voice using ElevenLabs API."""
+    if not elevenlabs_key:
+        return None
+    
+    # Default voice ID: "21m00Tcm4TlvDq8ikWAM" (Rachel)
+    voice_id = "21m00Tcm4TlvDq8ikWAM"
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": elevenlabs_key
+    }
+    data = {
+        "text": text[:1000],  # Limit length for performance
+        "model_id": "eleven_monolingual_v1",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75
+        }
+    }
+    try:
+        response = requests.post(url, json=data, headers=headers)
+        if response.status_status == 200:
+            return response.content
+    except Exception:
+        pass
+    return None
 
 def extract_file_text(uploaded_file):
     fname = uploaded_file.name.lower()
@@ -154,7 +183,7 @@ def is_image_request(prompt):
     return any(t in prompt.lower() for t in triggers)
 
 # ---------------------------------------------------------
-# 5. Sidebar Navigation (Private to Current User)
+# 5. Sidebar Navigation
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("🧠 OmniMind")
@@ -172,6 +201,11 @@ with st.sidebar:
         st.session_state.file_context = ""
         st.session_state.active_mode = "Standard"
         st.rerun()
+
+    st.divider()
+
+    st.markdown("### 🎙️ Audio Settings")
+    st.session_state.voice_enabled = st.toggle("Enable Voice Call Mode (Read Responses Aloud)", value=st.session_state.voice_enabled)
 
     st.divider()
 
@@ -204,7 +238,7 @@ with st.sidebar:
                 st.rerun()
 
 # ---------------------------------------------------------
-# 6. Main Chat Workspace
+# 6. Main Chat Area
 # ---------------------------------------------------------
 current_chat = st.session_state.user_chats[st.session_state.current_chat_id]
 messages = current_chat["messages"]
@@ -212,25 +246,23 @@ messages = current_chat["messages"]
 st.title(current_chat.get("title", "OmniMind Assistant"))
 st.caption("Created & Powered by Ali Debal")
 
-# Render Conversation
+# Render Messages
 for msg in messages:
     with st.chat_message(msg["role"]):
         if msg.get("image_url"):
             st.image(msg["image_url"], caption="Generated Image")
         if msg.get("content"):
             st.markdown(msg["content"])
+        if msg.get("audio"):
+            st.audio(msg["audio"], format="audio/mp3")
 
-# Speech API Component (Voice Assistant & Read Aloud)
-st.markdown("---")
-speech_html = """
-<div style="font-family: sans-serif; margin-bottom: 10px;">
-    <button onclick="startDictation()" style="padding: 8px 14px; border-radius: 8px; border: 1px solid #cbd5e1; background: #3b82f6; color: white; cursor: pointer; font-weight: bold; margin-right: 8px;">
-        🎤 Voice Input
+# Web Speech Dictation Tool
+speech_dictation_html = """
+<div style="font-family: sans-serif; margin-top: 15px; margin-bottom: 5px;">
+    <button onclick="startDictation()" style="padding: 8px 14px; border-radius: 8px; border: none; background: #3b82f6; color: white; font-weight: bold; cursor: pointer;">
+        🎤 Click to Speak (Voice Input)
     </button>
-    <button onclick="speakLastResponse()" style="padding: 8px 14px; border-radius: 8px; border: 1px solid #cbd5e1; background: #10b981; color: white; cursor: pointer; font-weight: bold;">
-        🔊 Read Last Answer Aloud
-    </button>
-    <p id="speech-status" style="font-size: 12px; color: #64748b; margin-top: 5px;"></p>
+    <span id="speech-status" style="font-size: 13px; color: #64748b; margin-left: 10px;"></span>
 </div>
 
 <script>
@@ -242,39 +274,28 @@ speech_html = """
             recognition.interimResults = false;
             recognition.lang = 'en-US';
             
-            document.getElementById('speech-status').innerText = 'Listening... Speak into your microphone.';
+            document.getElementById('speech-status').innerText = 'Listening... Speak now.';
             recognition.start();
 
             recognition.onresult = function(e) {
                 var transcript = e.results[0][0].transcript;
-                document.getElementById('speech-status').innerText = 'Recognized: "' + transcript + '"';
+                document.getElementById('speech-status').innerText = 'Copied to clipboard!';
                 navigator.clipboard.writeText(transcript);
-                alert('Copied your spoken voice prompt to clipboard: "' + transcript + '". Paste it into the chat box below!');
+                alert('Spoken prompt copied to clipboard: "' + transcript + '". Paste it into the input box below!');
             };
 
             recognition.onerror = function(e) {
-                document.getElementById('speech-status').innerText = 'Voice error: ' + e.error;
+                document.getElementById('speech-status').innerText = 'Error: ' + e.error;
             };
         } else {
-            alert('Web Speech API is not supported in this browser. Please try Chrome or Edge.');
-        }
-    }
-
-    function speakLastResponse() {
-        var chatMessages = window.parent.document.querySelectorAll('div[data-testid="stChatMessage"]');
-        if (chatMessages.length > 0) {
-            var lastMsg = chatMessages[chatMessages.length - 1].innerText;
-            var utterance = new SpeechSynthesisUtterance(lastMsg);
-            window.speechSynthesis.speak(utterance);
-        } else {
-            alert('No response available to read aloud.');
+            alert('Web Speech API is not supported in this browser. Use Chrome or Edge.');
         }
     }
 </script>
 """
-components.html(speech_html, height=80)
+components.html(speech_dictation_html, height=60)
 
-# Quick Action Menu (Adjacent Plus Sign Menu)
+# Input Controls
 action_col, input_col = st.columns([0.15, 0.85])
 
 with action_col:
@@ -305,7 +326,7 @@ with action_col:
 with input_col:
     prompt = st.chat_input("Ask anything, attach files, or type image prompts...")
 
-# Process Input
+# Single-execution Prompt Handler
 if prompt:
     if len(messages) <= 1 or current_chat.get("title") == "New Chat":
         current_chat["title"] = prompt[:30] + ("..." if len(prompt) > 30 else "")
@@ -339,15 +360,20 @@ if prompt:
                 api_messages.append({"role": m["role"], "content": m["content"]})
 
         with st.chat_message("assistant"):
-            placeholder = st.empty()
-            try:
-                response = query_ai_with_fallback(api_messages)
-                full_text = ""
-                for chunk in response:
-                    if chunk.choices[0].delta.content:
-                        full_text += chunk.choices[0].delta.content
-                        placeholder.markdown(full_text + "▌")
-                placeholder.markdown(full_text)
-                messages.append({"role": "assistant", "content": full_text})
-            except Exception as e:
-                st.error(f"Error: {e}")
+            with st.spinner("Thinking..."):
+                try:
+                    completion = query_ai_with_fallback(api_messages)
+                    full_text = completion.choices[0].message.content
+                    st.markdown(full_text)
+                    
+                    msg_data = {"role": "assistant", "content": full_text}
+                    
+                    if st.session_state.voice_enabled:
+                        audio_bytes = generate_natural_voice(full_text)
+                        if audio_bytes:
+                            st.audio(audio_bytes, format="audio/mp3", autoplay=True)
+                            msg_data["audio"] = audio_bytes
+                    
+                    messages.append(msg_data)
+                except Exception as e:
+                    st.error(f"Error processing request: {e}")
