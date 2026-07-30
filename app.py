@@ -20,16 +20,17 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# 2. Custom Styling & Dark Mode Rules
+# 2. Custom Styling & Fixed Layout
 # ---------------------------------------------------------
 st.markdown("""
 <style>
+    /* Hide top Streamlit UI elements */
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
     footer {visibility: hidden;}
     div[data-testid="stHeader"] {display: none !important;}
 
-    /* User Message Alignment (Right) */
+    /* Chat bubble user - RIGHT */
     div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity user"]) {
         flex-direction: row-reverse !important;
         text-align: right !important;
@@ -42,7 +43,7 @@ st.markdown("""
         color: #0f172a !important;
     }
 
-    /* Assistant Message Alignment (Left) */
+    /* Chat bubble assistant - LEFT */
     div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity assistant"]) {
         flex-direction: row !important;
         text-align: left !important;
@@ -82,7 +83,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 3. Private Session State Management
+# 3. Session State Init
 # ---------------------------------------------------------
 if "user_chats" not in st.session_state:
     initial_id = str(uuid.uuid4())
@@ -102,11 +103,14 @@ if "file_context" not in st.session_state:
 if "active_mode" not in st.session_state:
     st.session_state.active_mode = "Standard"
 
-if "voice_enabled" not in st.session_state:
-    st.session_state.voice_enabled = False
+if "selected_voice_id" not in st.session_state:
+    st.session_state.selected_voice_id = "21m00Tcm4TlvDq8ikWAM" # Rachel
+
+if "auto_speak" not in st.session_state:
+    st.session_state.auto_speak = False
 
 # ---------------------------------------------------------
-# 4. API & Speech Setup
+# 4. API Configurations
 # ---------------------------------------------------------
 groq_api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
 elevenlabs_key = st.secrets.get("ELEVENLABS_API_KEY") or os.getenv("ELEVENLABS_API_KEY")
@@ -117,6 +121,13 @@ if not groq_api_key:
 
 client = Groq(api_key=groq_api_key)
 MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
+
+VOICE_OPTIONS = {
+    "Rachel (Calm & Natural Female)": "21m00Tcm4TlvDq8ikWAM",
+    "Adam (Deep & Professional Male)": "pNInz6obpgDQGcFmaJgB",
+    "Antoni (Friendly Male)": "ErXwobaYiN019PkySvjV",
+    "Bella (Expressive Female)": "EXAVITQu4vr4xnSDxMaL"
+}
 
 def query_ai_with_fallback(api_messages):
     for model_id in MODELS:
@@ -131,13 +142,9 @@ def query_ai_with_fallback(api_messages):
             continue
     raise Exception("All AI backends are currently unreachable.")
 
-def generate_natural_voice(text):
-    """Converts text to human-like voice using ElevenLabs API."""
+def generate_natural_voice(text, voice_id):
     if not elevenlabs_key:
         return None
-    
-    # Default voice ID: "21m00Tcm4TlvDq8ikWAM" (Rachel)
-    voice_id = "21m00Tcm4TlvDq8ikWAM"
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     headers = {
         "Accept": "audio/mpeg",
@@ -145,16 +152,13 @@ def generate_natural_voice(text):
         "xi-api-key": elevenlabs_key
     }
     data = {
-        "text": text[:1000],  # Limit length for performance
+        "text": text[:800],
         "model_id": "eleven_monolingual_v1",
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.75
-        }
+        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
     }
     try:
         response = requests.post(url, json=data, headers=headers)
-        if response.status_status == 200:
+        if response.status_code == 200:
             return response.content
     except Exception:
         pass
@@ -183,7 +187,7 @@ def is_image_request(prompt):
     return any(t in prompt.lower() for t in triggers)
 
 # ---------------------------------------------------------
-# 5. Sidebar Navigation
+# 5. Sidebar Controls & Voice Settings
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("🧠 OmniMind")
@@ -204,8 +208,11 @@ with st.sidebar:
 
     st.divider()
 
-    st.markdown("### 🎙️ Audio Settings")
-    st.session_state.voice_enabled = st.toggle("Enable Voice Call Mode (Read Responses Aloud)", value=st.session_state.voice_enabled)
+    st.markdown("### 🎙️ Voice & Call Settings")
+    selected_voice_label = st.selectbox("AI Voice Persona", list(VOICE_OPTIONS.keys()))
+    st.session_state.selected_voice_id = VOICE_OPTIONS[selected_voice_label]
+
+    st.session_state.auto_speak = st.toggle("📞 Live Call Mode (Auto Read Answers)", value=st.session_state.auto_speak)
 
     st.divider()
 
@@ -238,7 +245,7 @@ with st.sidebar:
                 st.rerun()
 
 # ---------------------------------------------------------
-# 6. Main Chat Area
+# 6. Main Chat Interface
 # ---------------------------------------------------------
 current_chat = st.session_state.user_chats[st.session_state.current_chat_id]
 messages = current_chat["messages"]
@@ -246,134 +253,14 @@ messages = current_chat["messages"]
 st.title(current_chat.get("title", "OmniMind Assistant"))
 st.caption("Created & Powered by Ali Debal")
 
-# Render Messages
-for msg in messages:
+# Display Messages with Individual Speaker Icon
+for idx, msg in enumerate(messages):
     with st.chat_message(msg["role"]):
         if msg.get("image_url"):
             st.image(msg["image_url"], caption="Generated Image")
         if msg.get("content"):
             st.markdown(msg["content"])
-        if msg.get("audio"):
-            st.audio(msg["audio"], format="audio/mp3")
-
-# Web Speech Dictation Tool
-speech_dictation_html = """
-<div style="font-family: sans-serif; margin-top: 15px; margin-bottom: 5px;">
-    <button onclick="startDictation()" style="padding: 8px 14px; border-radius: 8px; border: none; background: #3b82f6; color: white; font-weight: bold; cursor: pointer;">
-        🎤 Click to Speak (Voice Input)
-    </button>
-    <span id="speech-status" style="font-size: 13px; color: #64748b; margin-left: 10px;"></span>
-</div>
-
-<script>
-    function startDictation() {
-        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-            var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            var recognition = new SpeechRecognition();
-            recognition.continuous = false;
-            recognition.interimResults = false;
-            recognition.lang = 'en-US';
-            
-            document.getElementById('speech-status').innerText = 'Listening... Speak now.';
-            recognition.start();
-
-            recognition.onresult = function(e) {
-                var transcript = e.results[0][0].transcript;
-                document.getElementById('speech-status').innerText = 'Copied to clipboard!';
-                navigator.clipboard.writeText(transcript);
-                alert('Spoken prompt copied to clipboard: "' + transcript + '". Paste it into the input box below!');
-            };
-
-            recognition.onerror = function(e) {
-                document.getElementById('speech-status').innerText = 'Error: ' + e.error;
-            };
-        } else {
-            alert('Web Speech API is not supported in this browser. Use Chrome or Edge.');
-        }
-    }
-</script>
-"""
-components.html(speech_dictation_html, height=60)
-
-# Input Controls
-action_col, input_col = st.columns([0.15, 0.85])
-
-with action_col:
-    with st.popover("➕ Options", use_container_width=True):
-        st.markdown("### Quick Actions")
-        up_file = st.file_uploader("Upload File", type=["pdf", "docx", "txt", "csv", "xlsx"])
-        if up_file:
-            st.session_state.file_context = extract_file_text(up_file)
-            st.success(f"Attached: {up_file.name}")
-
-        st.divider()
-        if st.button("🎨 Create Image Mode", use_container_width=True):
-            st.session_state.active_mode = "Image"
-            st.toast("Image Generation Mode Active!")
-
-        if st.button("📝 Canvas Mode", use_container_width=True):
-            st.session_state.active_mode = "Canvas"
-            st.toast("Canvas Mode Active!")
-
-        if st.button("🎓 Guided Learning Mode", use_container_width=True):
-            st.session_state.active_mode = "Guided"
-            st.toast("Guided Learning Active!")
-
-        if st.button("🔄 Reset Mode", use_container_width=True):
-            st.session_state.active_mode = "Standard"
-            st.toast("Standard Mode Active!")
-
-with input_col:
-    prompt = st.chat_input("Ask anything, attach files, or type image prompts...")
-
-# Single-execution Prompt Handler
-if prompt:
-    if len(messages) <= 1 or current_chat.get("title") == "New Chat":
-        current_chat["title"] = prompt[:30] + ("..." if len(prompt) > 30 else "")
-
-    messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    if st.session_state.active_mode == "Image" or is_image_request(prompt):
-        with st.chat_message("assistant"):
-            with st.spinner("🎨 Generating image..."):
-                encoded_prompt = urllib.parse.quote(prompt)
-                image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
-                response_text = f"Here is your generated image for: *\"{prompt}\"*"
-                st.markdown(response_text)
-                st.image(image_url, caption=prompt)
-                messages.append({"role": "assistant", "content": response_text, "image_url": image_url})
-    else:
-        sys_prompt = "You are OmniMind Assistant, created by Ali Debal. Never claim to be made by OpenAI, Meta, or Google."
-        if st.session_state.active_mode == "Guided":
-            sys_prompt += " Act as a tutor step-by-step."
-        elif st.session_state.active_mode == "Canvas":
-            sys_prompt += " Format responses in structured layout blocks."
-
-        api_messages = [{"role": "system", "content": sys_prompt}]
-        if st.session_state.file_context:
-            api_messages.append({"role": "system", "content": f"Document Context:\n{st.session_state.file_context[:10000]}"})
-        
-        for m in messages:
-            if m.get("content"):
-                api_messages.append({"role": m["role"], "content": m["content"]})
-
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                try:
-                    completion = query_ai_with_fallback(api_messages)
-                    full_text = completion.choices[0].message.content
-                    st.markdown(full_text)
-                    
-                    msg_data = {"role": "assistant", "content": full_text}
-                    
-                    if st.session_state.voice_enabled:
-                        audio_bytes = generate_natural_voice(full_text)
-                        if audio_bytes:
-                            st.audio(audio_bytes, format="audio/mp3", autoplay=True)
-                            msg_data["audio"] = audio_bytes
-                    
-                    messages.append(msg_data)
-                except Exception as e:
-                    st.error(f"Error processing request: {e}")
+            if msg["role"] == "assistant":
+                col_sp, _ = st.columns([0.1, 0.9])
+                with col_sp:
+                    if st.button("🔊 Listen", key=f"speak
