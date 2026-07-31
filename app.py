@@ -2,7 +2,6 @@ import os
 import uuid
 import urllib.parse
 import datetime
-import requests
 import streamlit as st
 import pypdf
 import docx
@@ -10,7 +9,7 @@ import pandas as pd
 from groq import Groq
 
 # ---------------------------------------------------------
-# 1. Page Configuration
+# 1. Page Configuration & Custom Gemini Styling
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="OmniMind Assistant",
@@ -18,9 +17,9 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom Styling
 st.markdown("""
 <style>
+    /* Hide default Streamlit headers and footers */
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
     footer {visibility: hidden;}
@@ -53,6 +52,7 @@ st.markdown("""
         color: #0f172a !important;
     }
 
+    /* Dark Mode Adjustments */
     @media (prefers-color-scheme: dark) {
         .stApp {
             background-color: #0f172a !important;
@@ -71,11 +71,23 @@ st.markdown("""
             color: #f8fafc !important;
         }
     }
+
+    /* Popover button styling to blend seamlessly */
+    div[data-testid="stPopover"] > button {
+        border-radius: 50% !important;
+        width: 44px !important;
+        height: 44px !important;
+        padding: 0 !important;
+        font-size: 20px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. Session State Setup
+# 2. Session State Management
 # ---------------------------------------------------------
 if "user_chats" not in st.session_state:
     initial_id = str(uuid.uuid4())
@@ -83,7 +95,7 @@ if "user_chats" not in st.session_state:
         initial_id: {
             "title": "New Chat",
             "messages": [
-                {"role": "assistant", "content": "Hello! I am OmniMind Assistant, created by Ali Debal. Ask me anything, generate images, attach files, or enable Guided Learning!"}
+                {"role": "assistant", "content": "Hello! I am OmniMind Assistant, created by Ali Debal. Ask me anything!"}
             ]
         }
     }
@@ -96,7 +108,7 @@ if "active_mode" not in st.session_state:
     st.session_state.active_mode = "Standard"
 
 # ---------------------------------------------------------
-# 3. API & Utility Functions
+# 3. API & File Utility Functions
 # ---------------------------------------------------------
 groq_api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
 
@@ -210,40 +222,45 @@ for msg in messages:
             st.markdown(msg["content"])
 
 # ---------------------------------------------------------
-# 6. Quick Actions Bar
+# 6. Bottom Input Bar with Gemini-Style '+' Popover
 # ---------------------------------------------------------
-st.markdown("### ➕ Quick Actions Bar")
+st.markdown("---")
 
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    if st.button("🎨 Create Image Mode", use_container_width=True):
-        st.session_state.active_mode = "Image"
-        st.toast("Image Generation Mode Active!")
-with c2:
-    if st.button("📑 Canvas Mode", use_container_width=True):
-        st.session_state.active_mode = "Canvas"
-        st.toast("Canvas Mode Active!")
-with c3:
-    if st.button("🎓 Guided Learning", use_container_width=True):
-        st.session_state.active_mode = "Guided"
-        st.toast("Guided Learning Active!")
-with c4:
-    if st.button("🔄 Standard Mode", use_container_width=True):
-        st.session_state.active_mode = "Standard"
-        st.toast("Standard Mode Active!")
+col_plus, col_input = st.columns([0.06, 0.94])
 
-st.caption(f"Current Active Mode: **{st.session_state.active_mode} Mode**")
+with col_plus:
+    with st.popover("➕", help="Upload files or switch modes"):
+        st.markdown("### 📎 Attach Document")
+        up_file = st.file_uploader("Upload PDF, DOCX, TXT, CSV, XLSX", type=["pdf", "docx", "txt", "csv", "xlsx"], label_visibility="collapsed")
+        if up_file:
+            st.session_state.file_context = extract_file_text(up_file)
+            st.success(f"Attached: {up_file.name}")
 
-# File Uploader Optional Accordion
-with st.expander("📎 Attach Document (PDF, DOCX, TXT, CSV, XLSX)"):
-    up_file = st.file_uploader("Upload document context", type=["pdf", "docx", "txt", "csv", "xlsx"], label_visibility="collapsed")
-    if up_file:
-        st.session_state.file_context = extract_file_text(up_file)
-        st.success(f"Attached: {up_file.name}")
+        st.divider()
+        st.markdown("### 🛠️ Switch Mode")
+        
+        if st.button("🎨 Image Mode", use_container_width=True):
+            st.session_state.active_mode = "Image"
+            st.toast("Image Generation Mode Active!")
+            
+        if st.button("📑 Canvas Mode", use_container_width=True):
+            st.session_state.active_mode = "Canvas"
+            st.toast("Canvas Mode Active!")
+            
+        if st.button("🎓 Guided Learning", use_container_width=True):
+            st.session_state.active_mode = "Guided"
+            st.toast("Guided Learning Active!")
+            
+        if st.button("🔄 Standard Mode", use_container_width=True):
+            st.session_state.active_mode = "Standard"
+            st.toast("Standard Mode Active!")
 
-# Standard Bottom Input Box
-prompt = st.chat_input("Ask anything, attach files, or type image prompts...")
+        st.caption(f"Current: **{st.session_state.active_mode}**")
 
+with col_input:
+    prompt = st.chat_input("Ask anything, attach files, or type image prompts...")
+
+# Process user prompt when entered via Enter key or Arrow button
 if prompt:
     if len(messages) <= 1 or current_chat.get("title") == "New Chat":
         current_chat["title"] = prompt[:25] + ("..." if len(prompt) > 25 else "")
