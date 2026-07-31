@@ -9,7 +9,7 @@ import pandas as pd
 from groq import Groq
 
 # ---------------------------------------------------------
-# 1. Page Configuration & Custom Gemini Styling
+# 1. Page Configuration & Gemini Layout Styling
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="OmniMind Assistant",
@@ -19,7 +19,7 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Hide default Streamlit headers and footers */
+    /* Hide default Streamlit elements */
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
     footer {visibility: hidden;}
@@ -72,7 +72,7 @@ st.markdown("""
         }
     }
 
-    /* Popover button styling to blend seamlessly */
+    /* Popover button styling for Gemini '+' look */
     div[data-testid="stPopover"] > button {
         border-radius: 50% !important;
         width: 44px !important;
@@ -87,7 +87,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. Session State Management
+# 2. Session State Setup
 # ---------------------------------------------------------
 if "user_chats" not in st.session_state:
     initial_id = str(uuid.uuid4())
@@ -108,18 +108,21 @@ if "active_mode" not in st.session_state:
     st.session_state.active_mode = "Standard"
 
 # ---------------------------------------------------------
-# 3. API & File Utility Functions
+# 3. API & Utilities
 # ---------------------------------------------------------
 groq_api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
 
 if not groq_api_key:
-    st.error("GROQ_API_KEY missing! Please configure it in Streamlit Secrets.")
+    st.error("GROQ_API_KEY missing! Please add GROQ_API_KEY to your Streamlit Secrets.")
     st.stop()
 
 client = Groq(api_key=groq_api_key)
-MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
+
+# Updated list of reliable Groq model identifiers
+MODELS = ["llama-3.3-70b-versatile", "llama3-8b-8192", "mixtral-8x7b-32768"]
 
 def query_ai_with_fallback(api_messages):
+    last_err = None
     for model_id in MODELS:
         try:
             return client.chat.completions.create(
@@ -128,9 +131,10 @@ def query_ai_with_fallback(api_messages):
                 temperature=0.7,
                 stream=False
             )
-        except Exception:
+        except Exception as e:
+            last_err = e
             continue
-    raise Exception("All AI backends are currently unreachable.")
+    raise Exception(f"AI backend error: {last_err}")
 
 def extract_file_text(uploaded_file):
     fname = uploaded_file.name.lower()
@@ -205,7 +209,7 @@ with st.sidebar:
                 st.rerun()
 
 # ---------------------------------------------------------
-# 5. Main Content Area
+# 5. Main Chat Feed
 # ---------------------------------------------------------
 current_chat = st.session_state.user_chats[st.session_state.current_chat_id]
 messages = current_chat["messages"]
@@ -213,7 +217,6 @@ messages = current_chat["messages"]
 st.title(current_chat.get("title", "OmniMind Assistant"))
 st.caption("Powered by Auto-Failover AI | Built by Ali Debal")
 
-# Render History Messages
 for msg in messages:
     with st.chat_message(msg["role"]):
         if msg.get("image_url"):
@@ -222,22 +225,22 @@ for msg in messages:
             st.markdown(msg["content"])
 
 # ---------------------------------------------------------
-# 6. Bottom Input Bar with Gemini-Style '+' Popover
+# 6. Gemini-Style Input Bar with Plus Button
 # ---------------------------------------------------------
 st.markdown("---")
 
 col_plus, col_input = st.columns([0.06, 0.94])
 
 with col_plus:
-    with st.popover("➕", help="Upload files or switch modes"):
-        st.markdown("### 📎 Attach Document")
+    with st.popover("➕", help="Upload files or select modes"):
+        st.markdown("### 📎 Upload File")
         up_file = st.file_uploader("Upload PDF, DOCX, TXT, CSV, XLSX", type=["pdf", "docx", "txt", "csv", "xlsx"], label_visibility="collapsed")
         if up_file:
             st.session_state.file_context = extract_file_text(up_file)
             st.success(f"Attached: {up_file.name}")
 
         st.divider()
-        st.markdown("### 🛠️ Switch Mode")
+        st.markdown("### 🛠️ Modes")
         
         if st.button("🎨 Image Mode", use_container_width=True):
             st.session_state.active_mode = "Image"
@@ -255,12 +258,12 @@ with col_plus:
             st.session_state.active_mode = "Standard"
             st.toast("Standard Mode Active!")
 
-        st.caption(f"Current: **{st.session_state.active_mode}**")
+        st.caption(f"Active: **{st.session_state.active_mode}**")
 
 with col_input:
     prompt = st.chat_input("Ask anything, attach files, or type image prompts...")
 
-# Process user prompt when entered via Enter key or Arrow button
+# Process Input
 if prompt:
     if len(messages) <= 1 or current_chat.get("title") == "New Chat":
         current_chat["title"] = prompt[:25] + ("..." if len(prompt) > 25 else "")
