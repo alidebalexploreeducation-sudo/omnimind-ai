@@ -1,10 +1,9 @@
 import os
+import json
 import uuid
 import urllib.parse
 import datetime
-import requests
 import streamlit as st
-import streamlit.components.v1 as components
 from groq import Groq
 import pypdf
 import docx
@@ -20,17 +19,16 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# 2. Custom Styling & Fixed Layout
+# 2. Custom CSS (User Messages Right, Assistant Left)
 # ---------------------------------------------------------
 st.markdown("""
 <style>
-    /* Hide default Streamlit top header and footer */
-    #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
-    footer {visibility: hidden;}
-    div[data-testid="stHeader"] {display: none !important;}
+    .stApp {
+        background-color: #f8fafc;
+        color: #0f172a;
+    }
 
-    /* User Chat Bubble (Right side) */
+    /* User Message Container - RIGHT */
     div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity user"]) {
         flex-direction: row-reverse !important;
         text-align: right !important;
@@ -40,14 +38,14 @@ st.markdown("""
         margin-right: 0 !important;
         max-width: 80% !important;
         padding: 12px 16px !important;
-        color: #0f172a !important;
+        color: #1e3a8a !important;
     }
 
-    /* Assistant Chat Bubble (Left side) */
+    /* Assistant Message Container - LEFT */
     div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity assistant"]) {
         flex-direction: row !important;
         text-align: left !important;
-        background-color: #f1f5f9 !important;
+        background-color: #ffffff !important;
         border: 1px solid #e2e8f0 !important;
         border-radius: 18px 18px 18px 2px !important;
         margin-right: auto !important;
@@ -55,25 +53,7 @@ st.markdown("""
         max-width: 80% !important;
         padding: 12px 16px !important;
         color: #0f172a !important;
-    }
-
-    @media (prefers-color-scheme: dark) {
-        .stApp {
-            background-color: #0f172a !important;
-            color: #f8fafc !important;
-        }
-        div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity user"]) {
-            background-color: #1e3a8a !important;
-            color: #ffffff !important;
-        }
-        div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity assistant"]) {
-            background-color: #1e293b !important;
-            border-color: #334155 !important;
-            color: #f8fafc !important;
-        }
-        p, span, h1, h2, h3, h4, h5, h6, label {
-            color: #f8fafc !important;
-        }
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
 
     .stButton > button {
@@ -83,19 +63,36 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 3. Private Session State Management
+# 3. Persistent Storage
 # ---------------------------------------------------------
-if "user_chats" not in st.session_state:
-    initial_id = str(uuid.uuid4())
-    st.session_state.user_chats = {
-        initial_id: {
-            "title": "New Chat",
-            "messages": [
-                {"role": "assistant", "content": "Hello! I am OmniMind Assistant, created by Ali Debal. How can I assist you today?"}
-            ]
-        }
+CHAT_FILE = "chats.json"
+
+def load_all_chats():
+    if os.path.exists(CHAT_FILE):
+        try:
+            with open(CHAT_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_all_chats(chats):
+    with open(CHAT_FILE, "w") as f:
+        json.dump(chats, f, indent=2)
+
+if "all_chats" not in st.session_state:
+    st.session_state.all_chats = load_all_chats()
+
+if "current_chat_id" not in st.session_state:
+    new_id = str(uuid.uuid4())
+    st.session_state.all_chats[new_id] = {
+        "title": "New Chat",
+        "messages": [
+            {"role": "assistant", "content": "Hello! I am OmniMind Assistant, created by Ali Debal. Ask me anything, generate images, attach files, or enable Guided Learning!"}
+        ]
     }
-    st.session_state.current_chat_id = initial_id
+    st.session_state.current_chat_id = new_id
+    save_all_chats(st.session_state.all_chats)
 
 if "file_context" not in st.session_state:
     st.session_state.file_context = ""
@@ -103,31 +100,17 @@ if "file_context" not in st.session_state:
 if "active_mode" not in st.session_state:
     st.session_state.active_mode = "Standard"
 
-if "selected_voice_id" not in st.session_state:
-    st.session_state.selected_voice_id = "21m00Tcm4TlvDq8ikWAM"
-
-if "auto_speak" not in st.session_state:
-    st.session_state.auto_speak = False
-
 # ---------------------------------------------------------
-# 4. API & Speech Setup
+# 4. API & Auto-Failover System
 # ---------------------------------------------------------
-groq_api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
-elevenlabs_key = st.secrets.get("ELEVENLABS_API_KEY") or os.getenv("ELEVENLABS_API_KEY")
-
-if not groq_api_key:
-    st.error("GROQ_API_KEY missing! Please configure it in Streamlit Secrets.")
+api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
+if not api_key:
+    st.error("GROQ_API_KEY missing! Please add it in your Streamlit secrets.")
     st.stop()
 
-client = Groq(api_key=groq_api_key)
-MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
+client = Groq(api_key=api_key)
 
-VOICE_OPTIONS = {
-    "Rachel (Calm & Natural Female)": "21m00Tcm4TlvDq8ikWAM",
-    "Adam (Deep & Professional Male)": "pNInz6obpgDQGcFmaJgB",
-    "Antoni (Friendly Male)": "ErXwobaYiN019PkySvjV",
-    "Bella (Expressive Female)": "EXAVITQu4vr4xnSDxMaL"
-}
+MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
 
 def query_ai_with_fallback(api_messages):
     for model_id in MODELS:
@@ -136,33 +119,11 @@ def query_ai_with_fallback(api_messages):
                 model=model_id,
                 messages=api_messages,
                 temperature=0.7,
-                stream=False
+                stream=True
             )
         except Exception:
             continue
-    raise Exception("All AI backends are currently unreachable.")
-
-def generate_natural_voice(text, voice_id):
-    if not elevenlabs_key:
-        return None
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-    headers = {
-        "Accept": "audio/mpeg",
-        "Content-Type": "application/json",
-        "xi-api-key": elevenlabs_key
-    }
-    data = {
-        "text": text[:800],
-        "model_id": "eleven_monolingual_v1",
-        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
-    }
-    try:
-        response = requests.post(url, json=data, headers=headers)
-        if response.status_code == 200:
-            return response.content
-    except Exception:
-        pass
-    return None
+    raise Exception("All model backends are currently unreachable.")
 
 def extract_file_text(uploaded_file):
     fname = uploaded_file.name.lower()
@@ -183,169 +144,145 @@ def extract_file_text(uploaded_file):
     return ""
 
 def is_image_request(prompt):
-    triggers = ["image", "picture", "photo", "draw", "generate image", "create an image"]
-    return any(t in prompt.lower() for t in triggers)
+    p = prompt.lower()
+    triggers = ["image", "picture", "photo", "draw", "generate", "create an image"]
+    return any(t in p for t in triggers)
 
 # ---------------------------------------------------------
-# 5. Sidebar Navigation & Audio Settings
+# 5. Sidebar (Gemini Style)
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("🧠 OmniMind")
-    st.caption(f"⚡ Session Active | {datetime.datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"⚡ Live Sync | {datetime.datetime.now().strftime('%H:%M:%S')}")
 
     if st.button("➕ New chat", use_container_width=True, type="primary"):
         new_id = str(uuid.uuid4())
-        st.session_state.user_chats[new_id] = {
+        st.session_state.all_chats[new_id] = {
             "title": "New Chat",
             "messages": [
-                {"role": "assistant", "content": "Hello! I am OmniMind Assistant, created by Ali Debal. How can I assist you?"}
+                {"role": "assistant", "content": "Hello! I am OmniMind Assistant, created by Ali Debal. How can I help you today?"}
             ]
         }
         st.session_state.current_chat_id = new_id
         st.session_state.file_context = ""
         st.session_state.active_mode = "Standard"
+        save_all_chats(st.session_state.all_chats)
         st.rerun()
 
     st.divider()
 
-    st.markdown("### 🎙️ Voice & Call Settings")
-    selected_voice_label = st.selectbox("AI Voice Persona", list(VOICE_OPTIONS.keys()))
-    st.session_state.selected_voice_id = VOICE_OPTIONS[selected_voice_label]
+    search_query = st.text_input("🔍 Search chats", placeholder="Filter history...").strip().lower()
 
-    st.session_state.auto_speak = st.toggle("📞 Live Call Mode (Auto Read Answers)", value=st.session_state.auto_speak)
+    st.markdown("### 📚 Chat Library")
+    
+    chats = st.session_state.all_chats
+    matching_ids = []
+    
+    for cid, cdata in chats.items():
+        title = cdata.get("title", "New Chat")
+        if search_query:
+            m_text = " ".join([m["content"] for m in cdata.get("messages", [])]).lower()
+            if search_query in title.lower() or search_query in m_text:
+                matching_ids.append(cid)
+        else:
+            matching_ids.append(cid)
+
+    if not matching_ids:
+        st.caption("No chats found.")
+    else:
+        for cid in reversed(matching_ids):
+            chat_title = chats[cid].get("title", "New Chat")
+            display_title = (chat_title[:20] + "...") if len(chat_title) > 20 else chat_title
+            
+            is_active = (cid == st.session_state.current_chat_id)
+            btn_label = f"💬 {display_title}" if not is_active else f"👉 {display_title}"
+            
+            col1, col2 = st.columns([0.82, 0.18])
+            with col1:
+                if st.button(btn_label, key=f"select_{cid}", use_container_width=True):
+                    st.session_state.current_chat_id = cid
+                    st.session_state.file_context = ""
+                    st.rerun()
+            with col2:
+                with st.popover("⋮"):
+                    new_title = st.text_input("Rename chat", value=chat_title, key=f"rename_{cid}")
+                    if st.button("Save Name", key=f"save_title_{cid}"):
+                        chats[cid]["title"] = new_title
+                        save_all_chats(chats)
+                        st.rerun()
+                    
+                    st.divider()
+                    if st.button("🗑️ Delete Chat", key=f"del_{cid}", type="primary"):
+                        del st.session_state.all_chats[cid]
+                        save_all_chats(st.session_state.all_chats)
+                        remaining = list(st.session_state.all_chats.keys())
+                        if remaining:
+                            st.session_state.current_chat_id = remaining[-1]
+                        else:
+                            new_id = str(uuid.uuid4())
+                            st.session_state.all_chats[new_id] = {
+                                "title": "New Chat",
+                                "messages": [{"role": "assistant", "content": "How can I help you?"}]
+                            }
+                            st.session_state.current_chat_id = new_id
+                        st.rerun()
 
     st.divider()
 
-    st.markdown("### 📚 Your Chats")
-    user_chats = st.session_state.user_chats
-    for cid in reversed(list(user_chats.keys())):
-        chat_title = user_chats[cid].get("title", "New Chat")
-        display_title = (chat_title[:20] + "...") if len(chat_title) > 20 else chat_title
-        is_active = (cid == st.session_state.current_chat_id)
-        btn_label = f"💬 {display_title}" if not is_active else f"👉 {display_title}"
-        
-        col1, col2 = st.columns([0.8, 0.2])
-        with col1:
-            if st.button(btn_label, key=f"sel_{cid}", use_container_width=True):
-                st.session_state.current_chat_id = cid
-                st.rerun()
-        with col2:
-            if st.button("🗑️", key=f"del_{cid}"):
-                del st.session_state.user_chats[cid]
-                remaining = list(st.session_state.user_chats.keys())
-                if remaining:
-                    st.session_state.current_chat_id = remaining[-1]
-                else:
-                    nid = str(uuid.uuid4())
-                    st.session_state.user_chats[nid] = {
-                        "title": "New Chat",
-                        "messages": [{"role": "assistant", "content": "How can I help you?"}]
-                    }
-                    st.session_state.current_chat_id = nid
-                st.rerun()
+    st.markdown("### 📎 File Attachments")
+    uploaded_file = st.file_uploader("Upload document", type=["pdf", "docx", "doc", "txt", "csv", "xlsx"])
+    if uploaded_file is not None:
+        try:
+            st.session_state.file_context = extract_file_text(uploaded_file)
+            st.success(f"Attached: {uploaded_file.name}")
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
 
 # ---------------------------------------------------------
 # 6. Main Chat Area
 # ---------------------------------------------------------
-current_chat = st.session_state.user_chats[st.session_state.current_chat_id]
+current_chat = st.session_state.all_chats[st.session_state.current_chat_id]
 messages = current_chat["messages"]
 
 st.title(current_chat.get("title", "OmniMind Assistant"))
-st.caption("Created & Powered by Ali Debal")
+st.caption("Powered by Auto-Failover AI | Built by Ali Debal")
 
-# Render Messages with dynamic Listen button
-for idx, msg in enumerate(messages):
+for msg in messages:
     with st.chat_message(msg["role"]):
         if msg.get("image_url"):
             st.image(msg["image_url"], caption="Generated Image")
         if msg.get("content"):
             st.markdown(msg["content"])
-            if msg["role"] == "assistant":
-                col_sp, _ = st.columns([0.15, 0.85])
-                with col_sp:
-                    if st.button("🔊 Listen", key=f"speak_btn_{idx}"):
-                        audio = generate_natural_voice(msg["content"], st.session_state.selected_voice_id)
-                        if audio:
-                            st.audio(audio, format="audio/mp3", autoplay=True)
-                        else:
-                            clean_txt = msg["content"].replace('"', '\\"').replace('\n', ' ')
-                            components.html(f"""
-                            <script>
-                                var msg = new SpeechSynthesisUtterance("{clean_txt}");
-                                window.speechSynthesis.speak(msg);
-                            </script>
-                            """, height=0)
 
-        if msg.get("audio"):
-            st.audio(msg["audio"], format="audio/mp3", autoplay=True)
+st.markdown("#### ➕ Quick Actions Bar")
+tool_col1, tool_col2, tool_col3, tool_col4 = st.columns(4)
 
-# ---------------------------------------------------------
-# 7. Bottom Input Bar (Gemini-style layout)
-# ---------------------------------------------------------
-st.markdown("---")
+with tool_col1:
+    if st.button("🎨 Create Image Mode", use_container_width=True):
+        st.session_state.active_mode = "Image"
+        st.toast("Image Generation Mode Selected!")
 
-c_opt, c_mic, c_input = st.columns([0.12, 0.12, 0.76])
+with tool_col2:
+    if st.button("🎨 Canvas Mode", use_container_width=True):
+        st.session_state.active_mode = "Canvas"
+        st.toast("Canvas Mode Enabled!")
 
-with c_opt:
-    with st.popover("➕ Options", use_container_width=True):
-        st.markdown("### Quick Actions")
-        up_file = st.file_uploader("Upload File", type=["pdf", "docx", "txt", "csv", "xlsx"])
-        if up_file:
-            st.session_state.file_context = extract_file_text(up_file)
-            st.success(f"Attached: {up_file.name}")
+with tool_col3:
+    if st.button("🎓 Guided Learning", use_container_width=True):
+        st.session_state.active_mode = "Guided"
+        st.toast("Guided Learning Mode Activated!")
 
-        st.divider()
-        if st.button("🎨 Image Mode", use_container_width=True):
-            st.session_state.active_mode = "Image"
-            st.toast("Image Generation Mode Active!")
+with tool_col4:
+    if st.button("🔄 Standard Mode", use_container_width=True):
+        st.session_state.active_mode = "Standard"
+        st.toast("Standard Mode Selected!")
 
-        if st.button("📝 Canvas Mode", use_container_width=True):
-            st.session_state.active_mode = "Canvas"
-            st.toast("Canvas Mode Active!")
+st.caption(f"Current Active Mode: **{st.session_state.active_mode} Mode**")
 
-        if st.button("🎓 Guided Mode", use_container_width=True):
-            st.session_state.active_mode = "Guided"
-            st.toast("Guided Learning Active!")
-
-        if st.button("🔄 Standard Mode", use_container_width=True):
-            st.session_state.active_mode = "Standard"
-            st.toast("Standard Mode Active!")
-
-with c_mic:
-    mic_html = """
-    <button onclick="startDictation()" style="width: 100%; height: 42px; border-radius: 8px; border: 1px solid #cbd5e1; background: #3b82f6; color: white; font-weight: bold; cursor: pointer;">
-        🎤 Speak
-    </button>
-    <script>
-        function startDictation() {
-            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-                var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                var recognition = new SpeechRecognition();
-                recognition.continuous = false;
-                recognition.interimResults = false;
-                recognition.lang = 'en-US';
-                recognition.start();
-
-                recognition.onresult = function(e) {
-                    var transcript = e.results[0][0].transcript;
-                    navigator.clipboard.writeText(transcript);
-                    alert('Copied prompt to clipboard: "' + transcript + '". Paste into text box!');
-                };
-            } else {
-                alert('Web Speech not supported on this browser.');
-            }
-        }
-    </script>
-    """
-    components.html(mic_html, height=48)
-
-with c_input:
-    prompt = st.chat_input("Ask anything, attach files, or type image prompts...")
-
-# Process Input Logic
-if prompt:
+if prompt := st.chat_input("Ask anything, attach files, or type image prompts..."):
     if len(messages) <= 1 or current_chat.get("title") == "New Chat":
-        current_chat["title"] = prompt[:30] + ("..." if len(prompt) > 30 else "")
+        auto_title = prompt[:30] + ("..." if len(prompt) > 30 else "")
+        current_chat["title"] = auto_title
 
     messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -356,41 +293,51 @@ if prompt:
             with st.spinner("🎨 Generating image..."):
                 encoded_prompt = urllib.parse.quote(prompt)
                 image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
-                response_text = f"Here is your generated image for: *\"{prompt}\"*"
+                
+                response_text = f"Here is the image generated by OmniMind for: *\"{prompt}\"*"
                 st.markdown(response_text)
                 st.image(image_url, caption=prompt)
-                messages.append({"role": "assistant", "content": response_text, "image_url": image_url})
+                
+                messages.append({
+                    "role": "assistant",
+                    "content": response_text,
+                    "image_url": image_url
+                })
+                save_all_chats(st.session_state.all_chats)
+
     else:
-        sys_prompt = "You are OmniMind Assistant, created by Ali Debal. Never claim to be made by OpenAI, Meta, or Google."
+        sys_prompt = "You are OmniMind Assistant, an advanced AI created and built by Ali Debal. Never claim to be made by Meta, OpenAI, or Google. You were created by Ali Debal."
+        
         if st.session_state.active_mode == "Guided":
-            sys_prompt += " Act as a tutor step-by-step."
+            sys_prompt += " Act as a patient tutor. Explain complex concepts step-by-step with clear examples and ask questions to make sure the user learns."
         elif st.session_state.active_mode == "Canvas":
-            sys_prompt += " Format responses in structured layout blocks."
+            sys_prompt += " Format responses as clean, structured, modular blocks suitable for a digital canvas."
 
         api_messages = [{"role": "system", "content": sys_prompt}]
+        
         if st.session_state.file_context:
-            api_messages.append({"role": "system", "content": f"Document Context:\n{st.session_state.file_context[:10000]}"})
+            api_messages.append({
+                "role": "system",
+                "content": f"Use this attached document context if helpful:\n\n{st.session_state.file_context[:10000]}"
+            })
         
         for m in messages:
             if m.get("content"):
                 api_messages.append({"role": m["role"], "content": m["content"]})
 
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                try:
-                    completion = query_ai_with_fallback(api_messages)
-                    full_text = completion.choices[0].message.content
-                    st.markdown(full_text)
-                    
-                    msg_data = {"role": "assistant", "content": full_text}
-                    
-                    if st.session_state.auto_speak:
-                        audio_bytes = generate_natural_voice(full_text, st.session_state.selected_voice_id)
-                        if audio_bytes:
-                            st.audio(audio_bytes, format="audio/mp3", autoplay=True)
-                            msg_data["audio"] = audio_bytes
-                    
-                    messages.append(msg_data)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error processing request: {e}")
+            placeholder = st.empty()
+            try:
+                response = query_ai_with_fallback(api_messages)
+                full_text = ""
+                for chunk in response:
+                    if chunk.choices[0].delta.content:
+                        full_text += chunk.choices[0].delta.content
+                        placeholder.markdown(full_text + "▌")
+                
+                placeholder.markdown(full_text)
+                messages.append({"role": "assistant", "content": full_text})
+                save_all_chats(st.session_state.all_chats)
+                
+            except Exception as e:
+                st.error(f"Error: {e}")
