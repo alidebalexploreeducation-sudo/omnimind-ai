@@ -9,7 +9,7 @@ import pandas as pd
 from groq import Groq
 
 # ---------------------------------------------------------
-# 1. Page Configuration & Gemini Layout Styling
+# 1. Page Configuration & Modern Styling
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="OmniMind Assistant",
@@ -19,11 +19,38 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Hide default Streamlit elements */
+    /* Hide default Streamlit overhead elements */
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
     footer {visibility: hidden;}
     div[data-testid="stHeader"] {display: none !important;}
+
+    /* Main Container Padding & Max Width */
+    .block-container {
+        max-width: 900px !important;
+        padding-top: 2rem !important;
+        padding-bottom: 2rem !important;
+    }
+
+    /* Hero Section Styling */
+    .hero-box {
+        text-align: center;
+        padding: 2.5rem 1rem 1.5rem 1rem;
+        border-radius: 16px;
+        margin-bottom: 2rem;
+    }
+    .hero-title {
+        font-size: 2.4rem !important;
+        font-weight: 700 !important;
+        margin-bottom: 0.5rem !important;
+        background: linear-gradient(90deg, #2563eb, #7c3aed);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+    .hero-subtitle {
+        font-size: 1.1rem !important;
+        color: #64748b !important;
+    }
 
     /* User Chat Bubble */
     div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity user"]) {
@@ -42,13 +69,13 @@ st.markdown("""
     div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity assistant"]) {
         flex-direction: row !important;
         text-align: left !important;
-        background-color: #f1f5f9 !important;
+        background-color: #f8fafc !important;
         border: 1px solid #e2e8f0 !important;
         border-radius: 18px 18px 18px 2px !important;
         margin-right: auto !important;
         margin-left: 0 !important;
-        max-width: 80% !important;
-        padding: 12px 16px !important;
+        max-width: 85% !important;
+        padding: 14px 18px !important;
         color: #0f172a !important;
     }
 
@@ -57,6 +84,9 @@ st.markdown("""
         .stApp {
             background-color: #0f172a !important;
             color: #f8fafc !important;
+        }
+        .hero-subtitle {
+            color: #94a3b8 !important;
         }
         div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity user"]) {
             background-color: #1e3a8a !important;
@@ -72,7 +102,7 @@ st.markdown("""
         }
     }
 
-    /* Popover button styling for Gemini '+' look */
+    /* Round Gemini '+' Popover Button */
     div[data-testid="stPopover"] > button {
         border-radius: 50% !important;
         width: 44px !important;
@@ -87,16 +117,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. Session State Setup
+# 2. Session State
 # ---------------------------------------------------------
 if "user_chats" not in st.session_state:
     initial_id = str(uuid.uuid4())
     st.session_state.user_chats = {
         initial_id: {
             "title": "New Chat",
-            "messages": [
-                {"role": "assistant", "content": "Hello! I am OmniMind Assistant, created by Ali Debal. Ask me anything!"}
-            ]
+            "messages": []
         }
     }
     st.session_state.current_chat_id = initial_id
@@ -107,18 +135,19 @@ if "file_context" not in st.session_state:
 if "active_mode" not in st.session_state:
     st.session_state.active_mode = "Standard"
 
+if "suggested_prompt" not in st.session_state:
+    st.session_state.suggested_prompt = ""
+
 # ---------------------------------------------------------
 # 3. API & Utilities
 # ---------------------------------------------------------
 groq_api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
 
 if not groq_api_key:
-    st.error("GROQ_API_KEY missing! Please add GROQ_API_KEY to your Streamlit Secrets.")
+    st.error("GROQ_API_KEY missing! Please check your Streamlit Secrets.")
     st.stop()
 
 client = Groq(api_key=groq_api_key)
-
-# Updated list of reliable Groq model identifiers
 MODELS = ["llama-3.3-70b-versatile", "llama3-8b-8192", "mixtral-8x7b-32768"]
 
 def query_ai_with_fallback(api_messages):
@@ -159,7 +188,7 @@ def is_image_request(prompt):
     return any(t in prompt.lower() for t in triggers)
 
 # ---------------------------------------------------------
-# 4. Sidebar Navigation
+# 4. Sidebar
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("🧠 OmniMind")
@@ -169,9 +198,7 @@ with st.sidebar:
         new_id = str(uuid.uuid4())
         st.session_state.user_chats[new_id] = {
             "title": "New Chat",
-            "messages": [
-                {"role": "assistant", "content": "Hello! I am OmniMind Assistant, created by Ali Debal. Ask me anything!"}
-            ]
+            "messages": []
         }
         st.session_state.current_chat_id = new_id
         st.session_state.file_context = ""
@@ -203,44 +230,68 @@ with st.sidebar:
                     nid = str(uuid.uuid4())
                     st.session_state.user_chats[nid] = {
                         "title": "New Chat",
-                        "messages": [{"role": "assistant", "content": "How can I help you?"}]
+                        "messages": []
                     }
                     st.session_state.current_chat_id = nid
                 st.rerun()
 
 # ---------------------------------------------------------
-# 5. Main Chat Feed
+# 5. Main Chat Feed & Landing Area
 # ---------------------------------------------------------
 current_chat = st.session_state.user_chats[st.session_state.current_chat_id]
 messages = current_chat["messages"]
 
-st.title(current_chat.get("title", "OmniMind Assistant"))
-st.caption("Powered by Auto-Failover AI | Built by Ali Debal")
+# Show Hero Welcome screen when current chat is empty
+if len(messages) == 0:
+    st.markdown("""
+        <div class="hero-box">
+            <div class="hero-title">Where knowledge begins.</div>
+            <div class="hero-subtitle">How can OmniMind help you today? Built by Ali Debal</div>
+        </div>
+    """, unsafe_allow_html=True)
 
-for msg in messages:
-    with st.chat_message(msg["role"]):
-        if msg.get("image_url"):
-            st.image(msg["image_url"], caption="Generated Image")
-        if msg.get("content"):
-            st.markdown(msg["content"])
+    # Suggestion Cards Grid
+    sc1, sc2, sc3 = st.columns(3)
+    with sc1:
+        if st.button("🎨 Create an Image\n\n*Generate vibrant visual art*", use_container_width=True):
+            st.session_state.suggested_prompt = "Generate a futuristic cyberpunk city with neon lights"
+            st.session_state.active_mode = "Image"
+            st.rerun()
+    with sc2:
+        if st.button("💡 Brainstorm Ideas\n\n*Explore creative concepts*", use_container_width=True):
+            st.session_state.suggested_prompt = "Give me 5 unique project ideas combining AI and web apps"
+            st.rerun()
+    with sc3:
+        if st.button("🎓 Learn Something\n\n*Step-by-step guidance*", use_container_width=True):
+            st.session_state.suggested_prompt = "Explain quantum computing in simple terms"
+            st.session_state.active_mode = "Guided"
+            st.rerun()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+else:
+    # Render Chat History
+    for msg in messages:
+        with st.chat_message(msg["role"]):
+            if msg.get("image_url"):
+                st.image(msg["image_url"], caption="Generated Image")
+            if msg.get("content"):
+                st.markdown(msg["content"])
 
 # ---------------------------------------------------------
-# 6. Gemini-Style Input Bar with Plus Button
+# 6. Bottom Input Bar with Plus Popover
 # ---------------------------------------------------------
-st.markdown("---")
-
-col_plus, col_input = st.columns([0.06, 0.94])
+col_plus, col_input = st.columns([0.07, 0.93])
 
 with col_plus:
-    with st.popover("➕", help="Upload files or select modes"):
-        st.markdown("### 📎 Upload File")
-        up_file = st.file_uploader("Upload PDF, DOCX, TXT, CSV, XLSX", type=["pdf", "docx", "txt", "csv", "xlsx"], label_visibility="collapsed")
+    with st.popover("➕", help="Upload files or change modes"):
+        st.markdown("### 📎 Upload Document")
+        up_file = st.file_uploader("PDF, DOCX, TXT, CSV, XLSX", type=["pdf", "docx", "txt", "csv", "xlsx"], label_visibility="collapsed")
         if up_file:
             st.session_state.file_context = extract_file_text(up_file)
             st.success(f"Attached: {up_file.name}")
 
         st.divider()
-        st.markdown("### 🛠️ Modes")
+        st.markdown("### 🛠️ Mode Selection")
         
         if st.button("🎨 Image Mode", use_container_width=True):
             st.session_state.active_mode = "Image"
@@ -258,19 +309,26 @@ with col_plus:
             st.session_state.active_mode = "Standard"
             st.toast("Standard Mode Active!")
 
-        st.caption(f"Active: **{st.session_state.active_mode}**")
+        st.caption(f"Active Mode: **{st.session_state.active_mode}**")
 
+# Handle suggested button clicks or standard typing
+prompt_placeholder = "Ask anything, attach files, or type image prompts..."
 with col_input:
-    prompt = st.chat_input("Ask anything, attach files, or type image prompts...")
+    if st.session_state.suggested_prompt:
+        user_input = st.chat_input(prompt_placeholder)
+        prompt = st.session_state.suggested_prompt
+        st.session_state.suggested_prompt = ""  # Reset
+    else:
+        prompt = st.chat_input(prompt_placeholder)
 
-# Process Input
+# ---------------------------------------------------------
+# 7. Request Handler
+# ---------------------------------------------------------
 if prompt:
-    if len(messages) <= 1 or current_chat.get("title") == "New Chat":
+    if len(messages) == 0 or current_chat.get("title") == "New Chat":
         current_chat["title"] = prompt[:25] + ("..." if len(prompt) > 25 else "")
 
     messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
 
     if st.session_state.active_mode == "Image" or is_image_request(prompt):
         with st.chat_message("assistant"):
@@ -281,6 +339,7 @@ if prompt:
                 st.markdown(response_text)
                 st.image(image_url, caption=prompt)
                 messages.append({"role": "assistant", "content": response_text, "image_url": image_url})
+                st.rerun()
     else:
         sys_prompt = "You are OmniMind Assistant, created by Ali Debal. Never claim to be made by OpenAI, Meta, or Google."
         if st.session_state.active_mode == "Guided":
@@ -301,7 +360,6 @@ if prompt:
                 try:
                     completion = query_ai_with_fallback(api_messages)
                     full_text = completion.choices[0].message.content
-                    st.markdown(full_text)
                     messages.append({"role": "assistant", "content": full_text})
                     st.rerun()
                 except Exception as e:
