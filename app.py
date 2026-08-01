@@ -9,7 +9,7 @@ import pandas as pd
 from groq import Groq
 
 # ---------------------------------------------------------
-# 1. Page Configuration & Modern Styling
+# 1. Page Configuration & Custom Gemini Styling
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="OmniMind Assistant",
@@ -52,7 +52,7 @@ st.markdown("""
         color: #64748b !important;
     }
 
-    /* User Chat Bubble */
+    /* Right-aligned User Chat Bubble */
     div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity user"]) {
         flex-direction: row-reverse !important;
         text-align: right !important;
@@ -65,7 +65,7 @@ st.markdown("""
         color: #0f172a !important;
     }
 
-    /* Assistant Chat Bubble */
+    /* Left-aligned Assistant Chat Bubble */
     div[data-testid="stChatMessage"]:has(div[aria-label="Chat message opacity assistant"]) {
         flex-direction: row !important;
         text-align: left !important;
@@ -113,11 +113,20 @@ st.markdown("""
         align-items: center !important;
         justify-content: center !important;
     }
+
+    /* Compact Toolbar Styling for User Action Buttons */
+    .user-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 6px;
+        margin-top: 4px;
+        margin-bottom: 12px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. Session State
+# 2. Session State Initialization
 # ---------------------------------------------------------
 if "user_chats" not in st.session_state:
     initial_id = str(uuid.uuid4())
@@ -138,8 +147,11 @@ if "active_mode" not in st.session_state:
 if "suggested_prompt" not in st.session_state:
     st.session_state.suggested_prompt = ""
 
+if "editing_idx" not in st.session_state:
+    st.session_state.editing_idx = None
+
 # ---------------------------------------------------------
-# 3. API & Utilities
+# 3. API & Helper Utilities
 # ---------------------------------------------------------
 groq_api_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
 
@@ -188,7 +200,7 @@ def is_image_request(prompt):
     return any(t in prompt.lower() for t in triggers)
 
 # ---------------------------------------------------------
-# 4. Sidebar
+# 4. Sidebar Navigation
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("🧠 OmniMind")
@@ -203,6 +215,7 @@ with st.sidebar:
         st.session_state.current_chat_id = new_id
         st.session_state.file_context = ""
         st.session_state.active_mode = "Standard"
+        st.session_state.editing_idx = None
         st.rerun()
 
     st.divider()
@@ -219,6 +232,7 @@ with st.sidebar:
         with col1:
             if st.button(btn_label, key=f"sel_{cid}", use_container_width=True):
                 st.session_state.current_chat_id = cid
+                st.session_state.editing_idx = None
                 st.rerun()
         with col2:
             if st.button("🗑️", key=f"del_{cid}"):
@@ -233,15 +247,16 @@ with st.sidebar:
                         "messages": []
                     }
                     st.session_state.current_chat_id = nid
+                st.session_state.editing_idx = None
                 st.rerun()
 
 # ---------------------------------------------------------
-# 5. Main Chat Feed & Landing Area
+# 5. Main Content Area & Conversation Feed
 # ---------------------------------------------------------
 current_chat = st.session_state.user_chats[st.session_state.current_chat_id]
 messages = current_chat["messages"]
 
-# Show Hero Welcome screen when current chat is empty
+# Render Hero Page if no chat history exists
 if len(messages) == 0:
     st.markdown("""
         <div class="hero-box">
@@ -250,7 +265,6 @@ if len(messages) == 0:
         </div>
     """, unsafe_allow_html=True)
 
-    # Suggestion Cards Grid
     sc1, sc2, sc3 = st.columns(3)
     with sc1:
         if st.button("🎨 Create an Image\n\n*Generate vibrant visual art*", use_container_width=True):
@@ -269,16 +283,44 @@ if len(messages) == 0:
 
     st.markdown("<br>", unsafe_allow_html=True)
 else:
-    # Render Chat History
-    for msg in messages:
+    # Display Chat Feed
+    for idx, msg in enumerate(messages):
         with st.chat_message(msg["role"]):
             if msg.get("image_url"):
                 st.image(msg["image_url"], caption="Generated Image")
             if msg.get("content"):
                 st.markdown(msg["content"])
+        
+        # User Action Buttons (Pencil Edit & Copy) under user messages
+        if msg["role"] == "user":
+            col_space, col_edit, col_copy = st.columns([0.76, 0.12, 0.12])
+            with col_edit:
+                if st.button("✏️ Edit", key=f"edit_btn_{idx}"):
+                    st.session_state.editing_idx = idx
+                    st.rerun()
+            with col_copy:
+                if st.button("📋 Copy", key=f"copy_btn_{idx}"):
+                    st.toast("Copied user message to clipboard context!")
+
+        # Inline Edit Field when Edit button is clicked
+        if st.session_state.editing_idx == idx:
+            with st.container():
+                new_text = st.text_input("Edit your prompt:", value=msg["content"], key=f"edit_input_{idx}")
+                c_save, c_cancel = st.columns([0.2, 0.8])
+                with c_save:
+                    if st.button("Save & Resubmit", key=f"save_edit_{idx}", type="primary"):
+                        # Truncate history after this edited prompt
+                        current_chat["messages"] = messages[:idx]
+                        st.session_state.editing_idx = None
+                        st.session_state.suggested_prompt = new_text
+                        st.rerun()
+                with c_cancel:
+                    if st.button("Cancel", key=f"cancel_edit_{idx}"):
+                        st.session_state.editing_idx = None
+                        st.rerun()
 
 # ---------------------------------------------------------
-# 6. Bottom Input Bar with Plus Popover
+# 6. Bottom Input Bar with '+' Popover
 # ---------------------------------------------------------
 col_plus, col_input = st.columns([0.07, 0.93])
 
@@ -311,18 +353,17 @@ with col_plus:
 
         st.caption(f"Active Mode: **{st.session_state.active_mode}**")
 
-# Handle suggested button clicks or standard typing
+# Processing Input
 prompt_placeholder = "Ask anything, attach files, or type image prompts..."
 with col_input:
     if st.session_state.suggested_prompt:
-        user_input = st.chat_input(prompt_placeholder)
         prompt = st.session_state.suggested_prompt
         st.session_state.suggested_prompt = ""  # Reset
     else:
         prompt = st.chat_input(prompt_placeholder)
 
 # ---------------------------------------------------------
-# 7. Request Handler
+# 7. Response Handler
 # ---------------------------------------------------------
 if prompt:
     if len(messages) == 0 or current_chat.get("title") == "New Chat":
